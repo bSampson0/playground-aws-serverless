@@ -1,0 +1,58 @@
+#!/bin/bash
+
+set -eu -o pipefail
+
+# this is the entrypoint for development. It wraps up compiling and calling dev.ts
+# all arguments, changes, etc. should be found in src/dev.ts
+
+# this script checks for all the prereqs and then calls dev.ts
+
+# add/replace .githooks to .git/hooks
+cp -a .githooks/. .git/hooks
+
+# check node exists
+if ! which node > /dev/null ; then
+	echo "node not found on the system. Install version in .nvmrc based on instructions in README"
+	exit 1
+fi
+
+# move to the top level directory of the repo
+TOP_LEVEL_DIR="$(git rev-parse --show-toplevel)"
+cd "$TOP_LEVEL_DIR"
+
+# check node version
+if ! diff .nvmrc <(node -v) > /dev/null ; then
+	echo "Uh Oh! The current node version does not match the version required in .nvmrc"
+	echo "If you have installed nvm, simply running 'nvm use' in this directory should solve the problem"
+	echo "If you don't have nvm yet, follow the instructions in the README"
+	echo "** Don't forget to add the bit to your shell profile **"
+	exit 1
+fi
+
+# check yarn exists
+if ! which yarn > /dev/null ; then
+	echo "yarn not found on the system. On macOS, you can install it with 'brew install yarn'"
+	exit 1
+fi
+
+# check serverless is installed globally.
+if ! which serverless > /dev/null ; then
+	echo "installing serverless globally"
+	yarn global add serverless
+fi
+
+# have to ensure that yarn install is up to date.
+# we use .yarn_install as a marker for the last time `yarn install` was run. Rerun the command when yarn.lock is updated
+if [ "yarn.lock" -nt ".yarn_install" ]; then
+	yarn install
+	touch .yarn_install
+fi
+
+# if .env doesn't exist, copy .env_example there
+if [ ! -f .env ]; then
+	cp .env_example .env
+fi
+
+# build and run dev.ts
+# tsc is configured to build what we expect in tsconfig.json
+./node_modules/.bin/tsc && node ./build_dev/dev.js "$@"

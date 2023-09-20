@@ -1,0 +1,103 @@
+# Refer to this service's README to configure all required SSM parameters.
+service: proxy-api
+
+frameworkVersion: "3"
+
+package:
+  individually: true
+
+plugins:
+  - serverless-bundle
+  - serverless-dotenv-plugin
+  - serverless-plugin-warmup
+  - serverless-associate-waf
+  - serverless-offline
+  - serverless-stack-termination-protection
+  - serverless-idempotency-helper
+  - serverless-iam-helper
+  - serverless-s3-bucket-helper
+  - serverless-online
+  - serverless-api-client-certificate
+  - serverless-plugin-scripts
+  - serverless-iam-roles-per-function
+  - "@enterprise-cmcs/serverless-waf-plugin"
+
+custom:
+  proxyApi: ${ssm:/configuration/${self:custom.stage}/prince/api, ssm:/configuration/default/prince/api, ""}
+  stage: ${opt:stage, self:provider.stage}
+  region: ${opt:region, self:provider.region}
+  serverlessTerminationProtection:
+    stages:
+      - master
+      - val
+      - production
+  webAclName: ${self:custom.stage}-${self:service}-webacl
+  associateWaf:
+    name: ${self:custom.webAclName}
+    version: V2
+  serverlessApiClientCertificate:
+    rotateCerts: true
+    daysLeft: 30
+  warmup:
+    default:
+      enabled: true
+      prewarm: true
+      events:
+        - schedule: rate(${ssm:/configuration/${self:custom.stage}/warmup/schedule, ssm:/configuration/default/warmup/schedule, "4 minutes"})
+      concurrency: ${ssm:/configuration/${self:custom.stage}/warmup/concurrency, ssm:/configuration/default/warmup/concurrency, 5}
+  serverless-iam-roles-per-function:
+    defaultInherit: true
+
+provider:
+  name: aws
+  runtime: nodejs14.x
+  region: us-east-1
+  tracing:
+    apiGateway: true
+  logs:
+    restApi: true
+  iam:
+    role:
+      path: ${ssm:/configuration/${self:custom.stage}/iam/path, ssm:/configuration/default/iam/path, "/"}
+      permissionsBoundary: ${ssm:/configuration/${self:custom.stage}/iam/permissionsBoundaryPolicy, ssm:/configuration/default/iam/permissionsBoundaryPolicy, ""}
+
+functions:
+  princeProxy:
+    handler: handlers/proxyFunc.main
+    iamRoleStatements: # add IAM statements for the function role here
+    environment:
+      proxyApi: ${self:custom.proxyApi}
+    timeout: 30
+    memorySize: 3008
+    maximumRetryAttempts: 0
+    events:
+      - http:
+          path: proxyFunc
+          method: post
+          cors: true
+
+resources:
+  Resources:
+    GatewayResponseDefault4XX:
+      Type: "AWS::ApiGateway::GatewayResponse"
+      Properties:
+        ResponseParameters:
+          gatewayresponse.header.Access-Control-Allow-Origin: "'*'"
+          gatewayresponse.header.Access-Control-Allow-Headers: "'*'"
+        ResponseType: DEFAULT_4XX
+        RestApiId: !Ref ApiGatewayRestApi
+    GatewayResponseDefault5XX:
+      Type: "AWS::ApiGateway::GatewayResponse"
+      Properties:
+        ResponseParameters:
+          gatewayresponse.header.Access-Control-Allow-Origin: "'*'"
+          gatewayresponse.header.Access-Control-Allow-Headers: "'*'"
+        ResponseType: DEFAULT_5XX
+        RestApiId: !Ref ApiGatewayRestApi
+  Outputs:
+    ApiGatewayRestApiName:
+      Value: !Ref ApiGatewayRestApi
+    ApiGatewayRestApiUrl:
+      Value: !Sub https://${ApiGatewayRestApi}.execute-api.${self:provider.region}.amazonaws.com/${self:custom.stage}
+    Region:
+      Value: !Sub ${AWS::Region}
